@@ -1,9 +1,9 @@
 const jwt = require('jsonwebtoken');
-const { data } = require('../db');
+const { pool } = require('../db');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'youz-super-secret-key-change-in-production';
 
-function authenticateToken(req, res, next) {
+async function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
@@ -16,7 +16,8 @@ function authenticateToken(req, res, next) {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    const user = data.users.find(u => u.id === decoded.userId);
+    const result = await pool.query('SELECT * FROM users WHERE id = $1', [decoded.userId]);
+    const user = result.rows[0];
     
     if (!user) {
       return res.status(401).json({
@@ -25,7 +26,7 @@ function authenticateToken(req, res, next) {
       });
     }
 
-    if (!user.isActive) {
+    if (!user.is_active) {
       return res.status(403).json({
         success: false,
         error: { code: 'USER_INACTIVE', message: 'Аккаунт деактивирован' }
@@ -42,18 +43,18 @@ function authenticateToken(req, res, next) {
   }
 }
 
-function formatUser(user) {
+function formatUser(row) {
   return {
-    id: user.id,
-    fullName: user.fullName,
-    phone: user.phone,
-    role: user.role,
-    pointId: user.pointId,
-    deskId: user.deskId,
-    isActive: !!user.isActive,
-    avatarUrl: user.avatarUrl,
-    createdAt: user.createdAt,
-    updatedAt: user.updatedAt
+    id: row.id,
+    fullName: row.full_name,
+    phone: row.phone,
+    role: row.role,
+    pointId: row.point_id,
+    deskId: row.desk_id,
+    isActive: !!row.is_active,
+    avatarUrl: row.avatar_url,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
   };
 }
 

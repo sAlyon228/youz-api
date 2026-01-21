@@ -68,8 +68,11 @@ app.use((err, req, res, next) => {
 });
 
 // Init DB and start server
-initDatabase();
-
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 ЮZ API сервер запущен на порту ${PORT}`);
+initDatabase().then(() => {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 ЮZ API сервер запущен на порту ${PORT}`);
+  });
+}).catch(err => {
+  console.error('Ошибка инициализации БД:', err);
+  process.exit(1);
 });

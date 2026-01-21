@@ -1,5 +1,5 @@
 const express = require('express');
-const { db } = require('../db');
+const { pool } = require('../db');
 const { authenticateToken } = require('../middleware/auth');
 
 const router = express.Router();
@@ -16,79 +16,53 @@ function formatLocation(row) {
 }
 
 // POST /api/v1/courier/location
-router.post('/location', authenticateToken, (req, res) => {
+router.post('/location', authenticateToken, async (req, res) => {
   try {
     const { latitude, longitude, accuracy } = req.body;
-    
     if (!latitude || !longitude) {
-      return res.status(400).json({
-        success: false,
-        error: { code: 'MISSING_FIELDS', message: 'Укажите координаты' }
-      });
+      return res.status(400).json({ success: false, error: { code: 'MISSING_FIELDS', message: 'Укажите координаты' } });
     }
-
-    const result = db.prepare(`
-      INSERT INTO courier_locations (courier_id, latitude, longitude, accuracy)
-      VALUES (?, ?, ?, ?)
-    `).run(req.user.id, latitude, longitude, accuracy || 0);
-
-    const location = db.prepare('SELECT * FROM courier_locations WHERE id = ?').get(result.lastInsertRowid);
-    res.status(201).json({ success: true, data: formatLocation(location) });
+    const result = await pool.query(
+      `INSERT INTO courier_locations (courier_id, latitude, longitude, accuracy) VALUES ($1, $2, $3, $4) RETURNING *`,
+      [req.user.id, latitude, longitude, accuracy || 0]
+    );
+    res.status(201).json({ success: true, data: formatLocation(result.rows[0]) });
   } catch (error) {
     console.error('Update location error:', error);
-    res.status(500).json({
-      success: false,
-      error: { code: 'SERVER_ERROR', message: 'Ошибка сервера' }
-    });
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Ошибка сервера' } });
   }
 });
 
 // GET /api/v1/courier/active
-router.get('/active', authenticateToken, (req, res) => {
+router.get('/active', authenticateToken, async (req, res) => {
   try {
-    // Получаем последнюю локацию каждого курьера за последний час
-    const locations = db.prepare(`
-      SELECT cl.* FROM courier_locations cl
-      INNER JOIN (
-        SELECT courier_id, MAX(timestamp) as max_ts
-        FROM courier_locations
-        WHERE timestamp > ?
-        GROUP BY courier_id
-      ) latest ON cl.courier_id = latest.courier_id AND cl.timestamp = latest.max_ts
-    `).all(Date.now() - 3600000); // За последний час
-    
-    res.json({ success: true, data: locations.map(formatLocation) });
+    const result = await pool.query(`
+      SELECT DISTINCT ON (courier_id) * FROM courier_locations 
+      WHERE timestamp > $1 ORDER BY courier_id, timestamp DESC
+    `, [Date.now() - 3600000]);
+    res.json({ success: true, data: result.rows.map(formatLocation) });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: { code: 'SERVER_ERROR', message: 'Ошибка сервера' }
-    });
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Ошибка сервера' } });
   }
 });
 
 // GET /api/v1/courier/:courierId/history
-router.get('/:courierId/history', authenticateToken, (req, res) => {
+router.get('/:courierId/history', authenticateToken, async (req, res) => {
   try {
     const { date } = req.query;
-    let query = 'SELECT * FROM courier_locations WHERE courier_id = ?';
+    let query = 'SELECT * FROM courier_locations WHERE courier_id = $1';
     const params = [req.params.courierId];
-    
     if (date) {
       const startOfDay = new Date(date).setHours(0, 0, 0, 0);
       const endOfDay = new Date(date).setHours(23, 59, 59, 999);
-      query += ' AND timestamp BETWEEN ? AND ?';
+      query += ' AND timestamp BETWEEN $2 AND $3';
       params.push(startOfDay, endOfDay);
     }
-    
     query += ' ORDER BY timestamp DESC LIMIT 100';
-    
-    const locations = db.prepare(query).all(...params);
-    res.json({ success: true, data: locations.map(formatLocation) });
+    const result = await pool.query(query, params);
+    res.json({ success: true, data: result.rows.map(formatLocation) });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: { code: 'SERVER_ERROR', message: 'Ошибка сервера' }
-    });
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Ошибка сервера' } });
   }
 });
 

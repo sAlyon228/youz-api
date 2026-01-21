@@ -1,12 +1,12 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { data, saveData } = require('../db');
+const { pool } = require('../db');
 const { formatUser, generateToken } = require('../middleware/auth');
 
 const router = express.Router();
 
 // POST /api/v1/auth/login
-router.post('/login', (req, res) => {
+router.post('/login', async (req, res) => {
   try {
     const { phone, password } = req.body;
 
@@ -20,9 +20,11 @@ router.post('/login', (req, res) => {
     // Нормализуем телефон
     const normalizedPhone = phone.replace(/\D/g, '');
     
-    const user = data.users.find(u => 
-      u.phone.replace(/\D/g, '') === normalizedPhone
+    const result = await pool.query(
+      `SELECT * FROM users WHERE REPLACE(phone, '+', '') = $1 OR phone = $2`,
+      [normalizedPhone, phone]
     );
+    const user = result.rows[0];
 
     if (!user) {
       return res.status(401).json({
@@ -31,7 +33,7 @@ router.post('/login', (req, res) => {
       });
     }
 
-    const validPassword = bcrypt.compareSync(password, user.passwordHash);
+    const validPassword = bcrypt.compareSync(password, user.password_hash);
     if (!validPassword) {
       return res.status(401).json({
         success: false,
@@ -39,7 +41,7 @@ router.post('/login', (req, res) => {
       });
     }
 
-    if (!user.isActive) {
+    if (!user.is_active) {
       return res.status(403).json({
         success: false,
         error: { code: 'USER_INACTIVE', message: 'Аккаунт деактивирован' }
@@ -64,8 +66,8 @@ router.post('/login', (req, res) => {
   }
 });
 
-// POST /api/v1/auth/register (только для СуперАдмина)
-router.post('/register', (req, res) => {
+// POST /api/v1/auth/register
+router.post('/register', async (req, res) => {
   try {
     const { fullName, phone, password, role } = req.body;
 
@@ -84,12 +86,8 @@ router.post('/register', (req, res) => {
     }
 
     // Проверяем существует ли пользователь
-    const normalizedPhone = phone.replace(/\D/g, '');
-    const existing = data.users.find(u => 
-      u.phone.replace(/\D/g, '') === normalizedPhone
-    );
-
-    if (existing) {
+    const existing = await pool.query('SELECT id FROM users WHERE phone = $1', [phone]);
+    if (existing.rows.length > 0) {
       return res.status(409).json({
         success: false,
         error: { code: 'USER_EXISTS', message: 'Пользователь с таким телефоном уже существует' }
@@ -99,23 +97,13 @@ router.post('/register', (req, res) => {
     const passwordHash = bcrypt.hashSync(password, 10);
     const userRole = role || 'SUPER_ADMIN';
 
-    const newUser = {
-      id: ++data._counters.users,
-      fullName,
-      phone,
-      passwordHash,
-      role: userRole,
-      pointId: null,
-      deskId: null,
-      isActive: 1,
-      avatarUrl: null,
-      createdAt: Date.now(),
-      updatedAt: Date.now()
-    };
+    const result = await pool.query(
+      `INSERT INTO users (full_name, phone, password_hash, role, is_active) 
+       VALUES ($1, $2, $3, $4, true) RETURNING *`,
+      [fullName, phone, passwordHash, userRole]
+    );
     
-    data.users.push(newUser);
-    saveData();
-    
+    const newUser = result.rows[0];
     const token = generateToken(newUser.id);
 
     res.status(201).json({

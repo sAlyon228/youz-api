@@ -1,5 +1,5 @@
 const express = require('express');
-const { db } = require('../db');
+const { pool } = require('../db');
 const { authenticateToken } = require('../middleware/auth');
 
 const router = express.Router();
@@ -18,9 +18,10 @@ function formatShop(row) {
 }
 
 // GET /api/v1/shops
-router.get('/', authenticateToken, (req, res) => {
+router.get('/', authenticateToken, async (req, res) => {
   try {
-    const shops = db.prepare('SELECT * FROM shops ORDER BY name').all();
+    const result = await pool.query('SELECT * FROM shops ORDER BY name');
+    const shops = result.rows;
     res.json({ success: true, data: shops.map(formatShop) });
   } catch (error) {
     res.status(500).json({
@@ -31,9 +32,10 @@ router.get('/', authenticateToken, (req, res) => {
 });
 
 // GET /api/v1/shops/:id
-router.get('/:id', authenticateToken, (req, res) => {
+router.get('/:id', authenticateToken, async (req, res) => {
   try {
-    const shop = db.prepare('SELECT * FROM shops WHERE id = ?').get(req.params.id);
+    const result = await pool.query('SELECT * FROM shops WHERE id = $1', [req.params.id]);
+    const shop = result.rows[0];
     if (!shop) {
       return res.status(404).json({
         success: false,
@@ -50,7 +52,7 @@ router.get('/:id', authenticateToken, (req, res) => {
 });
 
 // POST /api/v1/shops
-router.post('/', authenticateToken, (req, res) => {
+router.post('/', authenticateToken, async (req, res) => {
   try {
     const { name, address, latitude, longitude, phone, workingHours, isActive } = req.body;
     
@@ -61,13 +63,15 @@ router.post('/', authenticateToken, (req, res) => {
       });
     }
 
-    const result = db.prepare(`
-      INSERT INTO shops (name, address, latitude, longitude, phone, working_hours, is_active)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(name, address, latitude || null, longitude || null, phone || null, workingHours || null, isActive !== false ? 1 : 0);
+    const result = await pool.query(
+      `INSERT INTO shops (name, address, latitude, longitude, phone, working_hours, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [name, address, latitude || null, longitude || null,
+       phone || null, workingHours || null, isActive !== false]
+    );
 
-    const shop = db.prepare('SELECT * FROM shops WHERE id = ?').get(result.lastInsertRowid);
-    res.status(201).json({ success: true, data: formatShop(shop) });
+    const newShop = result.rows[0];
+    res.status(201).json({ success: true, data: formatShop(newShop) });
   } catch (error) {
     console.error('Create shop error:', error);
     res.status(500).json({
@@ -78,28 +82,27 @@ router.post('/', authenticateToken, (req, res) => {
 });
 
 // PUT /api/v1/shops/:id
-router.put('/:id', authenticateToken, (req, res) => {
+router.put('/:id', authenticateToken, async (req, res) => {
   try {
     const { name, address, latitude, longitude, phone, workingHours, isActive } = req.body;
     
     const updates = [];
     const values = [];
+    let idx = 1;
     
-    if (name !== undefined) { updates.push('name = ?'); values.push(name); }
-    if (address !== undefined) { updates.push('address = ?'); values.push(address); }
-    if (latitude !== undefined) { updates.push('latitude = ?'); values.push(latitude); }
-    if (longitude !== undefined) { updates.push('longitude = ?'); values.push(longitude); }
-    if (phone !== undefined) { updates.push('phone = ?'); values.push(phone); }
-    if (workingHours !== undefined) { updates.push('working_hours = ?'); values.push(workingHours); }
-    if (isActive !== undefined) { updates.push('is_active = ?'); values.push(isActive ? 1 : 0); }
+    if (name !== undefined) { updates.push(`name = $${idx++}`); values.push(name); }
+    if (address !== undefined) { updates.push(`address = $${idx++}`); values.push(address); }
+    if (latitude !== undefined) { updates.push(`latitude = $${idx++}`); values.push(latitude); }
+    if (longitude !== undefined) { updates.push(`longitude = $${idx++}`); values.push(longitude); }
+    if (phone !== undefined) { updates.push(`phone = $${idx++}`); values.push(phone); }
+    if (workingHours !== undefined) { updates.push(`working_hours = $${idx++}`); values.push(workingHours); }
+    if (isActive !== undefined) { updates.push(`is_active = $${idx++}`); values.push(isActive); }
     
     values.push(req.params.id);
 
-    if (updates.length > 0) {
-      db.prepare(`UPDATE shops SET ${updates.join(', ')} WHERE id = ?`).run(...values);
-    }
+    const result = await pool.query(`UPDATE shops SET ${updates.join(', ')} WHERE id = $${idx} RETURNING *`, values);
 
-    const shop = db.prepare('SELECT * FROM shops WHERE id = ?').get(req.params.id);
+    const shop = result.rows[0];
     res.json({ success: true, data: formatShop(shop) });
   } catch (error) {
     res.status(500).json({
@@ -110,9 +113,9 @@ router.put('/:id', authenticateToken, (req, res) => {
 });
 
 // DELETE /api/v1/shops/:id
-router.delete('/:id', authenticateToken, (req, res) => {
+router.delete('/:id', authenticateToken, async (req, res) => {
   try {
-    db.prepare('DELETE FROM shops WHERE id = ?').run(req.params.id);
+    await pool.query('DELETE FROM shops WHERE id = $1', [req.params.id]);
     res.json({ success: true, data: null });
   } catch (error) {
     res.status(500).json({
